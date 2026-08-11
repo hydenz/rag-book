@@ -1,0 +1,7 @@
+node_modules
+dist
+server/.env
+*.log
+backend/bin/
+backend/obj/
+backend/appsettings.Development.json
