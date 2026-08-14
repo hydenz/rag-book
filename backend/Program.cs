@@ -9,7 +9,9 @@ using RagBook.Api.Services;
 var builder = WebApplication.CreateBuilder(args);
 
 var port = Environment.GetEnvironmentVariable("PORT") ?? "3001";
-builder.WebHost.UseUrls($"http://localhost:{port}");
+// 0.0.0.0, not localhost: Render (and most PaaS) proxy in from outside the
+// container, so the app has to listen on all interfaces to be reachable.
+builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 
 var apiKey = string.IsNullOrWhiteSpace(builder.Configuration["OpenAI:ApiKey"])
     ? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
@@ -31,13 +33,39 @@ builder.Services.AddSingleton(new OpenAIClient(apiKey));
 
 builder.Services.AddSingleton(sp =>
 {
-    var connectionString = builder.Configuration.GetConnectionString("Default")
-        ?? throw new InvalidOperationException("ConnectionStrings:Default is not configured.");
-
+    var connectionString = ResolveConnectionString(builder.Configuration);
     var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
     dataSourceBuilder.UseVector();
     return dataSourceBuilder.Build();
 });
+
+// Render (and most PaaS Postgres add-ons) hand you a connection URI via
+// DATABASE_URL (postgres://user:pass@host:port/db) rather than an
+// appsettings-style connection string. Prefer it when present; fall back to
+// ConnectionStrings:Default for local dev (docker-compose).
+static string ResolveConnectionString(IConfiguration configuration)
+{
+    var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL");
+    if (string.IsNullOrWhiteSpace(databaseUrl))
+    {
+        return configuration.GetConnectionString("Default")
+            ?? throw new InvalidOperationException(
+                "ConnectionStrings:Default is not configured (and DATABASE_URL is not set).");
+    }
+
+    var uri = new Uri(databaseUrl);
+    var userInfo = uri.UserInfo.Split(':', 2);
+
+    return new NpgsqlConnectionStringBuilder
+    {
+        Host = uri.Host,
+        Port = uri.Port > 0 ? uri.Port : 5432,
+        Username = Uri.UnescapeDataString(userInfo[0]),
+        Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "",
+        Database = uri.AbsolutePath.TrimStart('/'),
+        SslMode = SslMode.Require,
+    }.ConnectionString;
+}
 
 builder.Services.AddSingleton<RagService>();
 
@@ -62,6 +90,12 @@ var app = builder.Build();
 
 app.UseCors();
 app.UseRateLimiter();
+
+// Serve the built frontend (frontend/dist, copied to wwwroot at container
+// build time — see Dockerfile) alongside the API, so this one service is the
+// whole deploy on Render.
+app.UseDefaultFiles();
+app.UseStaticFiles();
 
 var rag = app.Services.GetRequiredService<RagService>();
 try
@@ -141,5 +175,9 @@ app.MapPost("/api/chat", async (ChatRequest request, RagService service) =>
         return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status500InternalServerError);
     }
 }).RequireRateLimiting(OpenAiRateLimitPolicy);
+
+// Anything else that isn't an API route or a static asset is the SPA shell —
+// let the frontend's own client-side handling take it from there.
+app.MapFallbackToFile("index.html");
 
 app.Run();

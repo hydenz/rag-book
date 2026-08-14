@@ -1,0 +1,10 @@
+**/node_modules
+**/bin
+**/obj
+**/dist
+backend/wwwroot
+backend/appsettings.Development.json
+.git
+.gitignore
+README.md
+docker-compose.yml

@@ -26,7 +26,7 @@ A small full-stack learning project to understand **Retrieval-Augmented Generati
    docker compose up -d
    ```
 
-   This brings up `pgvector/pgvector:pg16` on `localhost:5432` (db `ragbook`, user/password `postgres`/`postgres` — matches `backend/appsettings.json`'s default connection string). The backend creates its own tables and the HNSW index on startup, so no manual schema step is needed.
+   This brings up `pgvector/pgvector:pg16` on `localhost:5432` (db `ragbook`, user/password `postgres`/`postgres` — matches `backend/appsettings.json`'s default connection string). The backend enables the `vector` extension and creates its own tables and HNSW index on startup, so no manual schema step is needed.
 
 2. Configure the backend's OpenAI API key (dev):
 
@@ -71,12 +71,24 @@ A small full-stack learning project to understand **Retrieval-Augmented Generati
 
 `/api/chat` and `/api/story/generate` are rate limited (3 requests/min per IP) and cap completion length, since both call OpenAI directly. `/api/story/generate` also enforces a 30s cooldown between regenerations (each one re-embeds every chunk). All are cost controls, not correctness constraints — see `backend/Program.cs` / `backend/Services/RagService.cs`.
 
+## Deploying (Render)
+
+One Docker image serves both: the frontend is built and copied into the backend's `wwwroot`, and the backend serves it as static files (falling back to `index.html` for any route that isn't an API call or a real asset) alongside `/api/*`. See `Dockerfile`.
+
+1. Push this repo to GitHub/GitLab, then in Render: **New → Blueprint**, point it at the repo. `render.yaml` provisions a free Postgres instance and a Docker web service wired together via `DATABASE_URL`.
+2. Make sure `pgvector` is enabled on the Render Postgres instance (new databases get it automatically; for an existing one, [see Render's docs](https://render.com/docs/postgresql-extensions) or ask support to enable it).
+3. In the Render dashboard, set the `OpenAI__ApiKey` secret on the web service (double underscore — that's how ASP.NET Core's config binder reads nested keys, `OpenAI:ApiKey`, from env vars). `OPENAI_API_KEY` also works, same as local dev.
+4. Deploy. Render builds the image, runs migrations-on-startup (the same `CREATE TABLE IF NOT EXISTS` / `CREATE EXTENSION IF NOT EXISTS vector` from local dev), and serves the app on the URL Render gives you — no separate frontend deploy.
+
+No `render.yaml`? Deploying by hand works the same way: a Docker web service pointed at this repo's `Dockerfile`, a `DATABASE_URL` env var pointing at any Postgres with `pgvector` available, and `OpenAI__ApiKey` (or `OPENAI_API_KEY`) set as a secret.
+
 ## Project layout
 
-- `backend/` — ASP.NET Core API. `Program.cs` wires up endpoints, CORS, and rate limiting; `Services/RagService.cs` has story generation, chunking, embedding, retrieval, and the RAG chat prompt; `Models/Models.cs` has the request/response DTOs.
+- `backend/` — ASP.NET Core API. `Program.cs` wires up endpoints, CORS, rate limiting, and (in production) serving the built frontend; `Services/RagService.cs` has story generation, chunking, embedding, retrieval, and the RAG chat prompt; `Models/Models.cs` has the request/response DTOs.
 - `frontend/` — React + TypeScript app. `src/types/api.ts` mirrors the backend DTOs (no OpenAPI spec exists, kept in sync by hand); `src/lib/ragTransport.ts` bridges the `ai` SDK's chat transport to the backend's REST API; `src/components/` has the two tabs.
 - `frontend/e2e-test.mjs` — a standalone Node script that hits a running backend directly and asserts the `/api/chat` response/stream shape. Run with `node e2e-test.mjs` while the backend is up.
 - `docker-compose.yml` — local Postgres + pgvector.
+- `Dockerfile`, `render.yaml` — production build (frontend → backend `wwwroot`) and Render Blueprint.
 
 ## Learning notes
 

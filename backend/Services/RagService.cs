@@ -28,6 +28,7 @@ public class RagService
     public async Task InitializeAsync()
     {
         var sql = $"""
+            CREATE EXTENSION IF NOT EXISTS vector;
             CREATE TABLE IF NOT EXISTS stories (
                 id SERIAL PRIMARY KEY,
                 title TEXT,
