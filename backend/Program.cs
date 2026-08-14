@@ -1,4 +1,5 @@
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Npgsql;
 using OpenAI;
@@ -69,6 +70,22 @@ static string ResolveConnectionString(IConfiguration configuration)
 
 builder.Services.AddSingleton<RagService>();
 
+// Render (and most PaaS) route traffic through their own proxy — the
+// connection this app actually sees is from that proxy, not the visitor, so
+// the rate limiter's "per IP" partition below would otherwise bucket every
+// real visitor together under one shared IP. Trust X-Forwarded-For and
+// recover the real client IP from it. KnownNetworks/KnownProxies are cleared
+// because the proxy's IP isn't fixed or published — the container isn't
+// reachable except through Render's routing layer, so trusting the header
+// unconditionally is safe here (this is the standard pattern for PaaS
+// deployments behind a load balancer with a changing IP).
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
 // Cost control: OpenAI-backed endpoints are rate limited per client IP so a stray
 // loop (or a stranger) can't rack up spend. Everything else is unlimited.
 const string OpenAiRateLimitPolicy = "openai-endpoints";
@@ -88,6 +105,9 @@ builder.Services.AddRateLimiter(options =>
 
 var app = builder.Build();
 
+// Must run before UseRateLimiter — it rewrites HttpContext.Connection.RemoteIpAddress
+// from X-Forwarded-For before the limiter reads it below.
+app.UseForwardedHeaders();
 app.UseCors();
 app.UseRateLimiter();
 
