@@ -1,3 +1,5 @@
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
 using Npgsql;
 using OpenAI;
 using Pgvector.Npgsql;
@@ -16,7 +18,8 @@ var apiKey = string.IsNullOrWhiteSpace(builder.Configuration["OpenAI:ApiKey"])
 if (string.IsNullOrWhiteSpace(apiKey))
 {
     throw new InvalidOperationException(
-        "OpenAI:ApiKey is not configured. Set it in appsettings.json, " +
+        "OpenAI:ApiKey is not configured. Set it via user secrets " +
+        "(dotnet user-secrets set \"OpenAI:ApiKey\" \"sk-...\"), in " +
         "appsettings.Development.json, or the OPENAI_API_KEY environment variable.");
 }
 
@@ -38,9 +41,27 @@ builder.Services.AddSingleton(sp =>
 
 builder.Services.AddSingleton<RagService>();
 
+// Cost control: OpenAI-backed endpoints are rate limited per client IP so a stray
+// loop (or a stranger) can't rack up spend. Everything else is unlimited.
+const string OpenAiRateLimitPolicy = "openai-endpoints";
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy(OpenAiRateLimitPolicy, httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 3,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
+});
+
 var app = builder.Build();
 
 app.UseCors();
+app.UseRateLimiter();
 
 var rag = app.Services.GetRequiredService<RagService>();
 try
@@ -76,12 +97,17 @@ app.MapPost("/api/story/generate", async (RagService service) =>
         var story = await service.GenerateStoryAsync();
         return Results.Ok(new { story });
     }
+    catch (InvalidOperationException ex)
+    {
+        // Regenerate cooldown — not an error, just too soon.
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status429TooManyRequests);
+    }
     catch (Exception ex)
     {
         Console.Error.WriteLine($"generate story error: {ex}");
         return Results.Json(new { error = "Failed to generate story" }, statusCode: StatusCodes.Status500InternalServerError);
     }
-});
+}).RequireRateLimiting(OpenAiRateLimitPolicy);
 
 app.MapGet("/api/chunks", async (RagService service) =>
 {
@@ -114,6 +140,6 @@ app.MapPost("/api/chat", async (ChatRequest request, RagService service) =>
         Console.Error.WriteLine($"chat error: {ex}");
         return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status500InternalServerError);
     }
-});
+}).RequireRateLimiting(OpenAiRateLimitPolicy);
 
 app.Run();

@@ -47,14 +47,33 @@ public class RagService
         await command.ExecuteNonQueryAsync();
     }
 
+    // Cost controls: cap completion length (avoid runaway generations) and
+    // throttle regeneration (each regen re-embeds every chunk, which costs money too).
+    private const int StoryMaxOutputTokens = 2500;
+    private const int ChatMaxOutputTokens = 500;
+    private static readonly TimeSpan RegenerateCooldown = TimeSpan.FromSeconds(30);
+    private DateTimeOffset _lastGeneratedAt = DateTimeOffset.MinValue;
+
     public async Task<string> GenerateStoryAsync()
     {
+        var sinceLast = DateTimeOffset.UtcNow - _lastGeneratedAt;
+        if (sinceLast < RegenerateCooldown)
+        {
+            var wait = RegenerateCooldown - sinceLast;
+            throw new InvalidOperationException(
+                $"Please wait {Math.Ceiling(wait.TotalSeconds)}s before generating another story.");
+        }
+        _lastGeneratedAt = DateTimeOffset.UtcNow;
+
         var completion = await _story.CompleteChatAsync(
-            ChatMessage.CreateSystemMessage(
-                "You are a creative fiction writer. Write an engaging, self-contained short story."),
-            ChatMessage.CreateUserMessage(
-                $"Write a fiction short story titled \"{Title}\". It should be around 1500-2500 words, " +
-                "with clear characters, a setting, and a plot twist. Write it as plain prose with paragraph breaks."));
+            [
+                ChatMessage.CreateSystemMessage(
+                    "You are a creative fiction writer. Write an engaging, self-contained short story."),
+                ChatMessage.CreateUserMessage(
+                    $"Write a fiction short story titled \"{Title}\". It should be around 1500-2500 words, " +
+                    "with clear characters, a setting, and a plot twist. Write it as plain prose with paragraph breaks."),
+            ],
+            new ChatCompletionOptions { MaxOutputTokenCount = StoryMaxOutputTokens });
 
         var story = completion.Value.Content[0].Text!.Trim();
 
@@ -108,29 +127,29 @@ public class RagService
         return chunks;
     }
 
+    // How many prior turns to resend as context. Keeps token cost from growing unbounded
+    // as a conversation gets longer.
+    private const int MaxHistoryMessages = 8;
+
     public async Task<ChatResponse> ChatWithRagAsync(string message, List<HistoryMessage> history)
     {
         var passages = await RetrieveAsync(message);
-
-        var story = "";
-        await using (var command = _db.CreateCommand("SELECT content FROM stories ORDER BY id DESC LIMIT 1"))
-            story = (await command.ExecuteScalarAsync() as string) ?? "";
-
         var context = string.Join("\n\n", passages.Select((p, i) => $"[Passage {i + 1}]\n{p.Content}"));
 
         var messages = new List<ChatMessage>
         {
-            ChatMessage.CreateSystemMessage($"""
-                You are an assistant that answers questions ONLY about the following fiction story
-                that was written by an AI. Use the retrieved passages as your ground truth.
-                If the answer is not in the passages, say you don't know. Never invent details.
-
-                === THE STORY ===
-                {story}
+            // Grounding comes from the retrieved passages below, not the full story text —
+            // resending the whole story on every turn was pure wasted tokens (RAG's job is
+            // to fetch only what's relevant).
+            ChatMessage.CreateSystemMessage("""
+                You are an assistant that answers questions ONLY about a fiction story that was
+                written by an AI. Use the retrieved passages provided with each question as your
+                ground truth. If the answer is not in the passages, say you don't know. Never
+                invent details.
                 """)
         };
 
-        foreach (var historyMessage in history)
+        foreach (var historyMessage in history.TakeLast(MaxHistoryMessages))
         {
             messages.Add(historyMessage.Role == "user"
                 ? ChatMessage.CreateUserMessage(historyMessage.Content)
@@ -139,7 +158,9 @@ public class RagService
 
         messages.Add(ChatMessage.CreateUserMessage($"Question: {message}\n\nRelevant passages from the RAG:\n{context}"));
 
-        var completion = await _chat.CompleteChatAsync(messages);
+        var completion = await _chat.CompleteChatAsync(
+            messages,
+            new ChatCompletionOptions { MaxOutputTokenCount = ChatMaxOutputTokens });
 
         return new ChatResponse(
             completion.Value.Content[0].Text!,
@@ -188,7 +209,10 @@ public class RagService
             }
 
             chunks.Add(text[start..end].Trim());
-            start = end - overlap;
+            if (end >= text.Length)
+                break;
+
+            start = Math.Max(start + 1, end - overlap);
         }
 
         return chunks.Where(c => c.Length > 0).ToList();
