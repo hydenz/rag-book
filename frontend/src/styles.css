@@ -339,6 +339,11 @@ button.secondary:hover:not(:disabled) {
 .muted {
   color: var(--ink-text-muted);
 }
+.error-line {
+  color: var(--oxblood);
+  font-size: 0.9rem;
+  margin: 0 0 16px;
+}
 .placeholder {
   margin: auto;
   text-align: center;

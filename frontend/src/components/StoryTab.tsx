@@ -5,11 +5,12 @@ type StoryState = "idle" | "loading" | "generating";
 interface StoryTabProps {
   story: string;
   state: StoryState;
+  error: string | null;
   onLoad: () => Promise<void>;
   onGenerate: () => Promise<void>;
 }
 
-export default function StoryTab({ story, state, onLoad, onGenerate }: StoryTabProps) {
+export default function StoryTab({ story, state, error, onLoad, onGenerate }: StoryTabProps) {
   const busy = state !== "idle";
 
   useEffect(() => {
@@ -34,6 +35,7 @@ export default function StoryTab({ story, state, onLoad, onGenerate }: StoryTabP
           The archivist is drafting a new manuscript — this can take up to a minute.
         </p>
       )}
+      {error && <p className="error-line">The archive couldn't comply — {error}</p>}
 
       {story && (
         <article className="manuscript">

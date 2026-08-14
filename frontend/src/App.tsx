@@ -16,14 +16,18 @@ export default function App() {
   const [tab, setTab] = useState<TabId>("story");
   const [story, setStory] = useState("");
   const [storyState, setStoryState] = useState<StoryState>("idle");
+  const [storyError, setStoryError] = useState<string | null>(null);
 
   const loadStory = useCallback(async () => {
     setStoryState("loading");
+    setStoryError(null);
     try {
       const res = await fetch("/api/story");
       const data = (await res.json()) as StoryResponse | ApiErrorResponse;
       if ("error" in data) throw new Error(data.error);
       setStory(data.story);
+    } catch (err) {
+      setStoryError(err instanceof Error ? err.message : "Failed to load the manuscript.");
     } finally {
       setStoryState("idle");
     }
@@ -31,11 +35,14 @@ export default function App() {
 
   const generateNew = useCallback(async () => {
     setStoryState("generating");
+    setStoryError(null);
     try {
       const res = await fetch("/api/story/generate", { method: "POST" });
       const data = (await res.json()) as StoryResponse | ApiErrorResponse;
       if ("error" in data) throw new Error(data.error);
       setStory(data.story);
+    } catch (err) {
+      setStoryError(err instanceof Error ? err.message : "Failed to write a new manuscript.");
     } finally {
       setStoryState("idle");
     }
@@ -70,6 +77,7 @@ export default function App() {
           <StoryTab
             story={story}
             state={storyState}
+            error={storyError}
             onLoad={loadStory}
             onGenerate={generateNew}
           />

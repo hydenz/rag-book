@@ -63,7 +63,7 @@ export default function ChatTab({ storyReady }: ChatTabProps) {
             {messageText(m)}
           </div>
         ))}
-        {error && <p className="muted">The archivist couldn't answer — {error.message}</p>}
+        {error && <p className="error-line">The archivist couldn't answer — {error.message}</p>}
         <div ref={scrollRef} />
       </div>
 
