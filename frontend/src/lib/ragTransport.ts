@@ -1,6 +1,7 @@
 import { DefaultChatTransport, type UIMessageChunk } from "ai";
 import { RAG_SOURCES_TYPE, type AppUIMessage, type RagDataParts } from "../types/chat";
 import type { ChatResponse, ApiErrorResponse, HistoryMessage } from "../types/api";
+import { getSessionId } from "./session";
 
 function extractText(message: AppUIMessage): string {
   if (Array.isArray(message.parts)) {
@@ -24,7 +25,7 @@ async function ragChatFetch(_url: RequestInfo | URL, init?: RequestInit): Promis
 
   const res = await fetch("/api/chat", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Session-Id": getSessionId() },
     signal: init?.signal,
     body: JSON.stringify({ message: last ? extractText(last) : "", history }),
   });

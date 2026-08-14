@@ -12,6 +12,8 @@ A small full-stack learning project to understand **Retrieval-Augmented Generati
 2. The story is split into overlapping chunks, each chunk is embedded (`text-embedding-3-small`) and stored in Postgres `story_chunks`, indexed with an HNSW index.
 3. `POST /api/chat` embeds your question, retrieves the most similar chunks via pgvector (`<=>` cosine distance), passes them as grounding context, and has GPT answer using only those passages.
 
+Every story and chat conversation is scoped to a per-browser session (a random id generated once and kept in `localStorage`, sent as `X-Session-Id` on every request — see `frontend/src/lib/session.ts`). There's no login: this is what keeps one visitor's "Write a new manuscript" from changing the story out from under everyone else who's currently chatting.
+
 ## Prerequisites
 
 - Node.js 20+
@@ -61,15 +63,15 @@ A small full-stack learning project to understand **Retrieval-Augmented Generati
 
 ## API
 
-| Method | Path                  | Body                    | Description                                         |
-| ------ | --------------------- | ------------------------ | --------------------------------------------------- |
-| GET    | `/api/health`          | —                        | Health check                                         |
-| GET    | `/api/story`           | —                        | Return the stored story (generates one if missing)   |
-| POST   | `/api/story/generate`  | —                        | Regenerate the story and re-embed its chunks         |
-| GET    | `/api/chunks`          | —                        | List all stored chunks                               |
-| POST   | `/api/chat`            | `{ message, history }`   | RAG answer + retrieved sources                       |
+| Method | Path                  | Headers                 | Body                    | Description                                         |
+| ------ | --------------------- | ------------------------ | ------------------------ | --------------------------------------------------- |
+| GET    | `/api/health`          | —                        | —                        | Health check                                         |
+| GET    | `/api/story`           | `X-Session-Id` required  | —                        | Return this session's story (generates one if missing) |
+| POST   | `/api/story/generate`  | `X-Session-Id` required  | —                        | Regenerate this session's story and re-embed its chunks |
+| GET    | `/api/chunks`          | `X-Session-Id` required  | —                        | List this session's stored chunks                    |
+| POST   | `/api/chat`            | `X-Session-Id` required  | `{ message, history }`   | RAG answer grounded in this session's story          |
 
-`/api/chat` and `/api/story/generate` are rate limited (3 requests/min per IP) and cap completion length, since both call OpenAI directly. `/api/story/generate` also enforces a 30s cooldown between regenerations (each one re-embeds every chunk). All are cost controls, not correctness constraints — see `backend/Program.cs` / `backend/Services/RagService.cs`.
+`/api/story`, `/api/story/generate`, and `/api/chat` are rate limited (3 requests/min per IP, shared across all three) and cap completion length, since each can call OpenAI directly — `/api/story` auto-generates when a session has no story yet, so it's gated too, not just the explicit regenerate button. `/api/story/generate` also enforces a 30s cooldown per session between regenerations (each one re-embeds every chunk). All are cost controls, not correctness constraints — see `backend/Program.cs` / `backend/Services/RagService.cs`.
 
 ## Deploying (Render)
 

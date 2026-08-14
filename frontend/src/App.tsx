@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import StoryTab from "./components/StoryTab";
 import ChatTab from "./components/ChatTab";
+import { getSessionId } from "./lib/session";
 import type { StoryResponse, ApiErrorResponse } from "./types/api";
 
 const TABS = [
@@ -22,7 +23,7 @@ export default function App() {
     setStoryState("loading");
     setStoryError(null);
     try {
-      const res = await fetch("/api/story");
+      const res = await fetch("/api/story", { headers: { "X-Session-Id": getSessionId() } });
       const data = (await res.json()) as StoryResponse | ApiErrorResponse;
       if ("error" in data) throw new Error(data.error);
       setStory(data.story);
@@ -37,7 +38,10 @@ export default function App() {
     setStoryState("generating");
     setStoryError(null);
     try {
-      const res = await fetch("/api/story/generate", { method: "POST" });
+      const res = await fetch("/api/story/generate", {
+        method: "POST",
+        headers: { "X-Session-Id": getSessionId() },
+      });
       const data = (await res.json()) as StoryResponse | ApiErrorResponse;
       if ("error" in data) throw new Error(data.error);
       setStory(data.story);

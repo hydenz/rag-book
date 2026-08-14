@@ -25,9 +25,19 @@ async function buildStream(reply, sources) {
   });
 }
 
+// Every /api/* endpoint is now scoped by X-Session-Id (see frontend's
+// src/lib/session.ts) — a fresh session has no story yet, so fetch /api/story
+// first (auto-generates one) before chatting against it.
+const sessionId = crypto.randomUUID();
+const sessionHeaders = { "X-Session-Id": sessionId };
+
+const storyRes = await fetch("http://localhost:3001/api/story", { headers: sessionHeaders });
+const storyData = await storyRes.json();
+console.log("backend story (first 80 chars):", storyData.story?.slice(0, 80));
+
 const res = await fetch("http://localhost:3001/api/chat", {
   method: "POST",
-  headers: { "Content-Type": "application/json" },
+  headers: { "Content-Type": "application/json", ...sessionHeaders },
   body: JSON.stringify({ message: "Who is the main character?", history: [] }),
 });
 const data = await res.json();

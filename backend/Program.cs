@@ -110,11 +110,28 @@ catch (Exception ex)
 
 app.MapGet("/api/health", () => Results.Ok(new { ok = true }));
 
-app.MapGet("/api/story", async (RagService service) =>
+// Every story/chat endpoint is scoped to a session so one visitor regenerating
+// or chatting doesn't affect anyone else — see frontend's src/lib/session.ts,
+// which generates a random id per browser and sends it on every request.
+const string SessionHeader = "X-Session-Id";
+static bool TryGetSessionId(HttpRequest request, out string sessionId)
 {
+    sessionId = request.Headers[SessionHeader].ToString();
+    return !string.IsNullOrWhiteSpace(sessionId) && sessionId.Length <= 128;
+}
+
+// Rate limited too: GetStoryOrGenerateAsync auto-generates when a session has
+// no story yet, so without this an attacker could mint a fresh X-Session-Id
+// per request and get unlimited free generations — the per-session cooldown
+// alone doesn't stop that, since a new session has never generated before.
+app.MapGet("/api/story", async (HttpRequest request, RagService service) =>
+{
+    if (!TryGetSessionId(request, out var sessionId))
+        return Results.Json(new { error = $"Missing or invalid {SessionHeader} header" }, statusCode: StatusCodes.Status400BadRequest);
+
     try
     {
-        var story = await service.GetStoryOrGenerateAsync();
+        var story = await service.GetStoryOrGenerateAsync(sessionId);
         return Results.Ok(new { story });
     }
     catch (Exception ex)
@@ -122,13 +139,16 @@ app.MapGet("/api/story", async (RagService service) =>
         Console.Error.WriteLine($"story error: {ex}");
         return Results.Json(new { error = "Failed to load story" }, statusCode: StatusCodes.Status500InternalServerError);
     }
-});
+}).RequireRateLimiting(OpenAiRateLimitPolicy);
 
-app.MapPost("/api/story/generate", async (RagService service) =>
+app.MapPost("/api/story/generate", async (HttpRequest request, RagService service) =>
 {
+    if (!TryGetSessionId(request, out var sessionId))
+        return Results.Json(new { error = $"Missing or invalid {SessionHeader} header" }, statusCode: StatusCodes.Status400BadRequest);
+
     try
     {
-        var story = await service.GenerateStoryAsync();
+        var story = await service.GenerateStoryAsync(sessionId);
         return Results.Ok(new { story });
     }
     catch (InvalidOperationException ex)
@@ -143,11 +163,14 @@ app.MapPost("/api/story/generate", async (RagService service) =>
     }
 }).RequireRateLimiting(OpenAiRateLimitPolicy);
 
-app.MapGet("/api/chunks", async (RagService service) =>
+app.MapGet("/api/chunks", async (HttpRequest request, RagService service) =>
 {
+    if (!TryGetSessionId(request, out var sessionId))
+        return Results.Json(new { error = $"Missing or invalid {SessionHeader} header" }, statusCode: StatusCodes.Status400BadRequest);
+
     try
     {
-        var chunks = await service.GetChunksAsync();
+        var chunks = await service.GetChunksAsync(sessionId);
         return Results.Ok(new { count = chunks.Count, chunks });
     }
     catch (Exception ex)
@@ -157,16 +180,19 @@ app.MapGet("/api/chunks", async (RagService service) =>
     }
 });
 
-app.MapPost("/api/chat", async (ChatRequest request, RagService service) =>
+app.MapPost("/api/chat", async (HttpRequest request, ChatRequest chatRequest, RagService service) =>
 {
-    if (string.IsNullOrWhiteSpace(request.Message))
+    if (!TryGetSessionId(request, out var sessionId))
+        return Results.Json(new { error = $"Missing or invalid {SessionHeader} header" }, statusCode: StatusCodes.Status400BadRequest);
+
+    if (string.IsNullOrWhiteSpace(chatRequest.Message))
     {
         return Results.Json(new { error = "message is required" }, statusCode: StatusCodes.Status400BadRequest);
     }
 
     try
     {
-        var response = await service.ChatWithRagAsync(request.Message, request.History ?? []);
+        var response = await service.ChatWithRagAsync(sessionId, chatRequest.Message, chatRequest.History ?? []);
         return Results.Ok(response);
     }
     catch (Exception ex)
