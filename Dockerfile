@@ -27,4 +27,9 @@ ENV ASPNETCORE_ENVIRONMENT=Production
 # Render sets $PORT and routes to it; Program.cs reads the same var and
 # binds 0.0.0.0:$PORT, defaulting to 3001 if unset (e.g. local `docker run`).
 EXPOSE 3001
+# Disable appsettings.json hot-reload watching: it uses inotify, and Render's
+# containers cap available inotify instances low enough that the default
+# FileSystemWatcher throws on startup ("configured user limit (128) ... has
+# been reached"). We don't edit config files at runtime anyway.
+ENV DOTNET_hostBuilder__reloadConfigOnChange=false
 ENTRYPOINT ["dotnet", "RagBook.Api.dll"]
