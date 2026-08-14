@@ -1,8 +1,8 @@
-import { DefaultChatTransport } from "ai";
+import { DefaultChatTransport, type UIMessageChunk } from "ai";
+import { RAG_SOURCES_TYPE, type AppUIMessage, type RagDataParts } from "../types/chat";
+import type { ChatResponse, ApiErrorResponse, HistoryMessage } from "../types/api";
 
-export const RAG_SOURCES_TYPE = "data-rag-sources";
-
-function extractText(message) {
+function extractText(message: AppUIMessage): string {
   if (Array.isArray(message.parts)) {
     const text = message.parts
       .filter((part) => part.type === "text")
@@ -10,14 +10,14 @@ function extractText(message) {
       .join("");
     if (text) return text;
   }
-  return message.content ?? "";
+  return "";
 }
 
-async function ragChatFetch(url, init) {
-  const body = JSON.parse(init?.body ?? "{}");
+async function ragChatFetch(_url: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const body: { messages?: AppUIMessage[] } = JSON.parse((init?.body as string) ?? "{}");
   const messages = body.messages ?? [];
   const last = messages[messages.length - 1];
-  const history = messages.slice(0, -1).map((m) => ({
+  const history: HistoryMessage[] = messages.slice(0, -1).map((m) => ({
     role: m.role === "assistant" ? "assistant" : "user",
     content: extractText(m),
   }));
@@ -26,19 +26,19 @@ async function ragChatFetch(url, init) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     signal: init?.signal,
-    body: JSON.stringify({ message: extractText(last), history }),
+    body: JSON.stringify({ message: last ? extractText(last) : "", history }),
   });
 
   if (!res.ok) {
     let detail = `Chat failed (${res.status})`;
     try {
-      const data = await res.json();
+      const data = (await res.json()) as ApiErrorResponse;
       detail = data.error ?? detail;
     } catch {}
     return new Response(detail, { status: res.status });
   }
 
-  const data = await res.json();
+  const data = (await res.json()) as ChatResponse;
   const reply = data.reply ?? "";
   const sources = data.sources ?? [];
 
@@ -48,7 +48,7 @@ async function ragChatFetch(url, init) {
 
   const stream = new ReadableStream({
     start(controller) {
-      const emit = (chunk) =>
+      const emit = (chunk: UIMessageChunk<unknown, RagDataParts>) =>
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 
       emit({ type: "text-start", id: partId });
@@ -72,7 +72,9 @@ async function ragChatFetch(url, init) {
   });
 }
 
-export const ragChatTransport = new DefaultChatTransport({
+export const ragChatTransport = new DefaultChatTransport<AppUIMessage>({
   api: "/api/chat",
   fetch: ragChatFetch,
 });
+
+export { RAG_SOURCES_TYPE };
