@@ -27,8 +27,19 @@ public class RagService
 
     public async Task InitializeAsync()
     {
+        // On a brand-new database, this is the data source's first connection —
+        // Npgsql builds its type map (which extension types exist) as that
+        // connection opens, before CREATE EXTENSION below has actually run. DDL
+        // text doesn't need type binding so table/index creation is unaffected,
+        // but any later query binding a Pgvector.Vector parameter would fail
+        // ("not supported for parameters having no NpgsqlDbType") because
+        // Npgsql's cached map still says `vector` doesn't exist. Create the
+        // extension on its own first, then force a reload before anything else.
+        await using (var extensionCommand = _db.CreateCommand("CREATE EXTENSION IF NOT EXISTS vector;"))
+            await extensionCommand.ExecuteNonQueryAsync();
+        await _db.ReloadTypesAsync();
+
         var sql = $"""
-            CREATE EXTENSION IF NOT EXISTS vector;
             CREATE TABLE IF NOT EXISTS stories (
                 id SERIAL PRIMARY KEY,
                 title TEXT,
