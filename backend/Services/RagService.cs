@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Npgsql;
 using OpenAI;
 using OpenAI.Chat;
@@ -83,11 +84,13 @@ public class RagService
                     "You are a creative fiction writer. Write an engaging, self-contained short story."),
                 ChatMessage.CreateUserMessage(
                     $"Write a fiction short story titled \"{Title}\". It should be around 1500-2500 words, " +
-                    "with clear characters, a setting, and a plot twist. Write it as plain prose with paragraph breaks."),
+                    "with clear characters, a setting, and a plot twist. Write it as plain prose with paragraph " +
+                    "breaks — no title line, no headings, no markdown formatting of any kind (no **bold**, no " +
+                    "#headings, no asterisks). Start directly with the story's first sentence."),
             ],
             new ChatCompletionOptions { MaxOutputTokenCount = StoryMaxOutputTokens });
 
-        var story = completion.Value.Content[0].Text!.Trim();
+        var story = StripLeadingTitleLine(completion.Value.Content[0].Text!.Trim());
 
         await using (var command = _db.CreateCommand("DELETE FROM story_chunks"))
             await command.ExecuteNonQueryAsync();
@@ -204,6 +207,16 @@ public class RagService
     {
         var result = await _embeddings.GenerateEmbeddingAsync(text);
         return result.Value.ToFloats().ToArray();
+    }
+
+    // GPT sometimes prepends a bold or heading-style title line despite being
+    // told not to (e.g. "**The Whispering Archive**\n\n..."). We don't render
+    // markdown, so leftover asterisks/hashes would show up as literal
+    // characters in the prose — strip a leading title-shaped line if present.
+    private static string StripLeadingTitleLine(string story)
+    {
+        var match = Regex.Match(story, @"^\s*(\*\*[^\n]+\*\*|#{1,6}[^\n]+)\s*\n+");
+        return match.Success ? story[match.Length..].TrimStart() : story;
     }
 
     private static List<string> ChunkText(string text, int chunkSize = 1000, int overlap = 200)
